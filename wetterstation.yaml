@@ -39,4 +39,27 @@ script:
     - switch.turn_on: resistance_bias
     - delay: $stabilization
 
-  - id:
+  - id: end_measure
+    mode: single
+    then:
+      - switch.turn_off: resistance_bias
+
+  - id: test_resistance
+    mode: single
+    then:
+      - script.execute: begin_measure
+      - script.wait: begin_measure
+
+      - if:
+          condition:
+            lambda: "retun id(resistance_sensore).state < $wet_onboot
+          then:
+            - script.execute: its_raining
+      - script.execute: end_measure
+      - script.wait: end_measure
+
+  - id: save_current_resistance
+    then:
+      - sensor.template.publish:
+        id: latest_resistance_sensor
+        state: !lamda "return id(resistance_sensore).state;"
