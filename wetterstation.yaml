@@ -1,0 +1,42 @@
+substitutions:
+  name: Wetterstation
+  friendly_name: "Wetterstation"
+  
+  # Widerstandswert für Spannungsteiler auf GPIO19
+  resistor_value: "10kOhm"
+
+  # Widerstandswerte
+  min_resistance: "1000"
+  max_resistance: "50000"
+
+  # On Boot Feuchtigkeitserkennung-Schwellwert
+  wet_onboot: "20000"
+
+  #Messintervall
+  measure_dry: "5000"
+  measure_wet: "30000"
+  stabilization: 2sec
+
+esphome:
+  name: $name
+  platform: ESP32
+  board: esp32dev
+  onboot:
+    then:
+      - ....
+
+captive_portal:
+
+ota:
+
+api:
+
+script:
+
+- id: begin_measure
+  mode: single
+  then:
+    - switch.turn_on: resistance_bias
+    - delay: $stabilization
+
+  - id:
