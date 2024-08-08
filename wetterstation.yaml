@@ -1,65 +1,55 @@
-substitutions:
-  name: Wetterstation
-  friendly_name: "Wetterstation"
-  
-  # Widerstandswert für Spannungsteiler auf GPIO19
-  resistor_value: "10kOhm"
-
-  # Widerstandswerte
-  min_resistance: "1000"
-  max_resistance: "50000"
-
-  # On Boot Feuchtigkeitserkennung-Schwellwert
-  wet_onboot: "20000"
-
-  #Messintervall
-  measure_dry: "5000"
-  measure_wet: "30000"
-  stabilization: 2sec
-
 esphome:
-  name: $name
-  platform: ESP32
+  name: regensensor
+  platform: esp32
   board: esp32dev
-  onboot:
-    then:
-      - ....
 
-captive_portal:
+wifi:
+  ssid: "your_wifi_ssid"
+  password: "your_wifi_password"
 
-ota:
+logger:
 
 api:
+  password: "your_api_password"
 
-script:
+ota:
+  password: "your_ota_password"
 
-- id: begin_measure
-  mode: single
-  then:
-    - switch.turn_on: resistance_bias
-    - delay: $stabilization
+sensor:
+  - platform: adc
+    pin: GPIO34  # ADC Pin für die Messung
+    name: "Regensensor Feuchtigkeit"
+    update_interval: never  # Kein regelmäßiges Update, wird manuell gesteuert
+    attenuation: 11db
+    id: regensensor_feuchtigkeit
+    filters:
+      - multiply: 3.3  # Korrekturfaktor, je nach Spannungsteiler
+      - sliding_window_moving_average:
+          window_size: 15  # Mittelwert über 15 Sekunden
+          send_every: 15s  # Alle 15 Sekunden neuen Mittelwert senden
+      - delta: 0.01  # Verhindert unnötige Updates bei minimalen Änderungen
 
-  - id: end_measure
-    mode: single
+binary_sensor:
+  - platform: template
+    name: "Regensensor Status"
+    id: regensensor_status
+    lambda: |-
+      if (id(regensensor_feuchtigkeit).state < 1.65) {
+        // Wenn Feuchtigkeit erkannt wird, weniger häufig messen
+        id(messintervall).set_interval(300s);  // Alle 5 Minuten messen
+        return true;  // Regen
+      } else {
+        // Wenn es trocken ist, sehr häufig messen
+        id(messintervall).set_interval(10s);  // Alle 10 Sekunden messen
+        return false;  // Trocken
+      }
+    filters:
+      - delayed_on: 10s  # Verzögert das Umschalten zu "Regen" um 10 Sekunden
+      - delayed_off: 30s # Verzögert das Umschalten zu "Trocken" um 30 Sekunden
+    device_class: moisture  # Zeigt in Home Assistant "Feuchtigkeit" an
+
+interval:
+  - interval: 10s
     then:
-      - switch.turn_off: resistance_bias
-
-  - id: test_resistance
-    mode: single
-    then:
-      - script.execute: begin_measure
-      - script.wait: begin_measure
-
-      - if:
-          condition:
-            lambda: "retun id(resistance_sensore).state < $wet_onboot
-          then:
-            - script.execute: its_raining
-      - script.execute: end_measure
-      - script.wait: end_measure
-
-  - id: save_current_resistance
-    then:
-      - sensor.template.publish:
-        id: latest_resistance_sensor
-        state: !lamda "return id(resistance_sensore).state;"
+      - component.update: regensensor_feuchtigkeit
+    id: messintervall  # ID für dynamische Anpassung des Messintervalls
