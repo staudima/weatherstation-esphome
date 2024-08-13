@@ -1,55 +1,155 @@
+substitutions:
+  name: esphome-web-5fc880
+  friendly_name: Wetterstation
+
 esphome:
-  name: regensensor
-  platform: esp32
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2024.6.0
+  name_add_mac_suffix: false
+  project:
+    name: esphome.web
+    version: dev
+  on_boot: 
+    then:
+      - script.execute: measure_loop
+
+
+esp32:
   board: esp32dev
+  framework:
+    type: arduino
 
-wifi:
-  ssid: "your_wifi_ssid"
-  password: "your_wifi_password"
-
+# Enable logging
 logger:
 
+# Enable Home Assistant API
 api:
-  password: "your_api_password"
 
+# Allow Over-The-Air updates
 ota:
-  password: "your_ota_password"
+- platform: esphome
 
-sensor:
-  - platform: adc
-    pin: GPIO34  # ADC Pin für die Messung
-    name: "Regensensor Feuchtigkeit"
-    update_interval: never  # Kein regelmäßiges Update, wird manuell gesteuert
-    attenuation: 11db
-    id: regensensor_feuchtigkeit
-    filters:
-      - multiply: 3.3  # Korrekturfaktor, je nach Spannungsteiler
-      - sliding_window_moving_average:
-          window_size: 15  # Mittelwert über 15 Sekunden
-          send_every: 15s  # Alle 15 Sekunden neuen Mittelwert senden
-      - delta: 0.01  # Verhindert unnötige Updates bei minimalen Änderungen
+# Allow provisioning Wi-Fi via serial
+improv_serial:
 
-binary_sensor:
-  - platform: template
-    name: "Regensensor Status"
-    id: regensensor_status
-    lambda: |-
-      if (id(regensensor_feuchtigkeit).state < 1.65) {
-        // Wenn Feuchtigkeit erkannt wird, weniger häufig messen
-        id(messintervall).set_interval(300s);  // Alle 5 Minuten messen
-        return true;  // Regen
-      } else {
-        // Wenn es trocken ist, sehr häufig messen
-        id(messintervall).set_interval(10s);  // Alle 10 Sekunden messen
-        return false;  // Trocken
-      }
-    filters:
-      - delayed_on: 10s  # Verzögert das Umschalten zu "Regen" um 10 Sekunden
-      - delayed_off: 30s # Verzögert das Umschalten zu "Trocken" um 30 Sekunden
-    device_class: moisture  # Zeigt in Home Assistant "Feuchtigkeit" an
+wifi:
+  # Set up a wifi access point
+  ap: {}
 
-interval:
-  - interval: 10s
+# In combination with the `ap` this allows the user
+# to provision wifi credentials to the device via WiFi AP.
+captive_portal:
+
+dashboard_import:
+  package_import_url: github://esphome/example-configs/esphome-web/esp32.yaml@main
+  import_full_config: true
+
+# Sets up Bluetooth LE (Only on ESP32) to allow the user
+# to provision wifi credentials to the device.
+esp32_improv:
+  authorizer: none
+
+# To have a "next url" for improv serial
+web_server:
+
+# Skript definieren
+script:
+  - id: measure_and_detect
+    mode: single
     then:
-      - component.update: regensensor_feuchtigkeit
-    id: messintervall  # ID für dynamische Anpassung des Messintervalls
+      # Bias einschalten für 2 Sekunden Stabilisierung
+      - switch.turn_on: resistance_bias
+      - delay: 2s
+      - text_sensor.template.publish:
+          id: text_status
+          state: !lambda "return (id(real_resistance_sensor).state < 35000) ? \"Regen\" : \"Trocken\";"
+      - switch.turn_off: resistance_bias
+
+  - id: measure_loop
+    mode: single
+    then:
+      - while:
+          condition:
+            lambda: "return true;"
+          then:
+            - script.execute: measure_and_detect
+            - script.wait: measure_and_detect
+            - delay: !lambda "return (id(text_status).state == \"Trocken\") ? 30000 : 600000;"
+
+
+      
+
+# Textsensor
+text_sensor:
+  - platform: template
+    id: text_status
+    name: "Regensensor"
+
+# Sensoren
+sensor:
+  ## REGENSENSOR
+  - platform: adc
+    id: source_sensor
+    pin: GPIO35
+    name: "ADC"
+    internal: true
+    update_interval: 250ms
+    attenuation: 12db
+    filters:
+      - median:
+          window_size: 7
+          send_every: 4
+          send_first_at: 3
+      - multiply: 0.846153 # 3.9 (11db Attenuation Vollbereichsspannung) -> 3.3V
+
+  - platform: resistance
+    sensor: source_sensor
+    configuration: DOWNSTREAM
+    id: real_resistance_sensor
+    resistor: 10kOhm
+    reference_voltage: 3.3V
+    internal: true
+    icon: "mdi:omega"
+
+  ## WINDMESSER
+  - platform: adc
+    id: windmesser_resistance_raw
+    pin: GPIO34
+    internal: true
+    update_interval: 6s
+    filters:
+      median:
+
+  - platform: resistance
+    id: windmesser_live_raw
+    resistor: 10kΩ
+    configuration: DOWNSTREAM
+    sensor: windmesser_resistance_raw
+    internal: true
+
+  - platform: template
+    name: "Windgeschwindigkeit"
+    update_interval: 30s
+    lambda: |-
+      float wind_corr = id(windmesser_live_raw).state - 232.6;
+      float min_res = 0.0;
+      float max_res = 2000.0;
+      float min_speed = 0.0;
+      float max_speed = 100.0;
+      float speed = (wind_corr - min_res) * (max_speed - min_speed) / (max_res - min_res) + min_speed;
+      if (speed < 0) {
+        speed = 0;
+      }
+      return speed;
+    unit_of_measurement: "km/h"
+    accuracy_decimals: 2
+    icon: mdi:weather-windy
+
+# Intervallmessung und Intervallstromversorgung (Korrosionsschutz)
+switch:
+  - platform: gpio
+    id: resistance_bias
+    name: "Widerstands-Bias"
+    pin: GPIO25
+    internal: true
