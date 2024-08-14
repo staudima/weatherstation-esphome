@@ -12,6 +12,7 @@ esphome:
     version: dev
   on_boot: 
     then:
+      - delay: 30s
       - script.execute: measure_loop
 
 
@@ -60,10 +61,10 @@ script:
     then:
       # Bias einschalten für 2 Sekunden Stabilisierung
       - switch.turn_on: resistance_bias
-      - delay: 2s
+      - delay: 5s
       - text_sensor.template.publish:
           id: text_status
-          state: !lambda "return (id(real_resistance_sensor).state < 35000) ? \"Regen\" : \"Trocken\";"
+          state: !lambda "return (id(real_resistance_sensor).state < 5000) ? \"Regen\" : \"Trocken\";"
       - switch.turn_off: resistance_bias
 
   - id: measure_loop
@@ -85,6 +86,7 @@ text_sensor:
   - platform: template
     id: text_status
     name: "Regensensor"
+    icon: mdi:weather-rainy
 
 # Sensoren
 sensor:
@@ -117,9 +119,12 @@ sensor:
     id: windmesser_resistance_raw
     pin: GPIO34
     internal: true
-    update_interval: 6s
+    update_interval: 2s
     filters:
-      median:
+      - median:
+          window_size: 15
+          send_every: 15
+          send_first_at: 5
 
   - platform: resistance
     id: windmesser_live_raw
